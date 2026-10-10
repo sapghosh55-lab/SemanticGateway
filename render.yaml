@@ -22,7 +22,7 @@ services:
       - key: SIMILARITY_THRESHOLD
         value: "0.45"
       - key: FAST_MODEL_NAME
-        value: llama3-8b-8192
+        value: llama-3.1-8b-instant
       - key: FAST_MODEL_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: FAST_MODEL_API_KEY
