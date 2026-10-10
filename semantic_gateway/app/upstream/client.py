@@ -61,15 +61,13 @@ class UpstreamClient:
         return ""
 
     def map_groq_model_name(self, model_name: str, route_name: str) -> str:
-        """Map local or legacy/decommissioned model names to valid active Groq API model identifiers."""
+        """Map local or legacy/decommissioned model names to guaranteed active Groq API model identifiers."""
         m = (model_name or "").strip().lower()
-        if m in ("gemma2:2b", "gemma2", "gemma", "gemma-2b", "gemma2-9b-it", "gemma-7b-it"):
-            return "llama-3.1-8b-instant"
-        if m in ("llama3:70b", "llama3.3", "llama-3.3-70b"):
-            return "llama-3.3-70b-versatile"
-        if ":" in m:
-            return "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
-        return model_name.strip()
+        if m in ("llama-3.3-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"):
+            return m
+        if route_name == "fast_lane":
+            return "llama3-8b-8192"
+        return "llama-3.3-70b-versatile"
 
     def resolve_target(self, decision: RouteDecision) -> Tuple[str, str, str, str, str]:
         """
@@ -202,11 +200,8 @@ class UpstreamClient:
 
             print(f"[DEBUG GROQ ERROR]: {response.status_code} - {response.text}")
 
-            # If 404 model_not_found or non-200 error, fallback to candidate models
-            if route_name == "deep_lane":
-                fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
-            else:
-                fallback_models = ["llama-3.1-8b-instant", "llama3-8b-8192", "mixtral-8x7b-32768"]
+            # If 404 model_not_found or non-200 error, fallback across all known active Groq models
+            fallback_models = ["llama3-8b-8192", "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
 
             for alt_model in fallback_models:
                 if alt_model == clean_payload['model']:
@@ -310,10 +305,7 @@ class UpstreamClient:
                         err_text = err_bytes.decode("utf-8", errors="replace")
                         print(f"[DEBUG GROQ ERROR]: {response.status_code} - {err_text}")
 
-                        if route_name == "deep_lane":
-                            fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
-                        else:
-                            fallback_models = ["llama-3.1-8b-instant", "llama3-8b-8192", "mixtral-8x7b-32768"]
+                        fallback_models = ["llama3-8b-8192", "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
 
                         for alt_model in fallback_models:
                             if alt_model == clean_payload['model']:

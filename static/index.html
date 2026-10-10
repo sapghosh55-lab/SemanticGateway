@@ -187,7 +187,7 @@
             <!-- Metric 3: FAST LANE (Ollama Gemma 2B) -->
             <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-3.5 flex flex-col justify-between">
                 <div class="flex items-center justify-between text-xs text-[#8b949e]">
-                    <span id="metric-fast-title">FAST LANE (Groq Llama 3.1 8B)</span>
+                    <span id="metric-fast-title">FAST LANE (Groq Llama 3 8B)</span>
                     <span id="metric-fast-pct" class="text-[11px] px-1.5 py-0.5 rounded border border-emerald-800/40 bg-emerald-950/40 text-emerald-400 font-mono font-medium">99.9%</span>
                 </div>
                 <div class="mt-2 flex items-baseline justify-between">
@@ -341,10 +341,10 @@
                                         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                                         <span class="font-medium text-emerald-400 text-[11px]">FAST LANE</span>
                                     </div>
-                                    <span class="text-[10px] font-mono text-emerald-400/80" id="node-fast-model">llama-3.1-8b-instant</span>
+                                    <span class="text-[10px] font-mono text-emerald-400/80" id="node-fast-model">llama3-8b-8192</span>
                                 </div>
                                 <div class="flex items-center justify-between text-[10px] text-[#8b949e] font-mono mt-1">
-                                    <span>Groq Llama 3.1 8B</span>
+                                    <span>Groq Llama 3 8B</span>
                                     <span>Cost: $0.0001/1k</span>
                                 </div>
                             </div>
@@ -478,7 +478,7 @@
                 timestamp: new Date().toLocaleTimeString(),
                 prompt: "What is 25 * 4?",
                 route: "fast_lane",
-                model: "llama-3.1-8b-instant",
+                model: "llama3-8b-8192",
                 latency_ms: 11.2,
                 cost_saved: 0.0003,
                 status: "200 OK"
@@ -496,7 +496,7 @@
                 timestamp: new Date(Date.now() - 45000).toLocaleTimeString(),
                 prompt: "Translate to French: Good morning",
                 route: "fast_lane",
-                model: "llama-3.1-8b-instant",
+                model: "llama3-8b-8192",
                 latency_ms: 9.4,
                 cost_saved: 0.0002,
                 status: "200 OK"
