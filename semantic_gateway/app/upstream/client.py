@@ -27,6 +27,38 @@ def is_valid_api_key(key: Optional[str]) -> bool:
     return True
 
 
+DECOMMISSIONED_MODELS = {
+    "llama3-8b-8192",
+    "llama3-70b-8192",
+    "gemma2-9b-it",
+    "gemma-7b-it",
+    "llama2-70b-4096",
+    "llama-3.1-70b-versatile",
+    "mixtral-8x7b-32768",
+    "mixtral-8x7b",
+    "gemma2:2b",
+}
+
+VALID_GROQ_MODELS = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "llama-3.2-3b-preview",
+    "llama-3.2-1b-preview",
+]
+
+
+def build_groq_candidate_models(route_name: str, requested_model: str) -> list[str]:
+    req = requested_model.strip() if requested_model else ""
+    if not req or req in DECOMMISSIONED_MODELS:
+        req = "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
+
+    candidates = [req]
+    for m in VALID_GROQ_MODELS:
+        if m not in candidates and m not in DECOMMISSIONED_MODELS:
+            candidates.append(m)
+    return candidates
+
+
 class UpstreamClient:
     """Async client for forwarding chat completion requests to upstream LLM providers."""
 
@@ -62,9 +94,8 @@ class UpstreamClient:
 
     def map_groq_model_name(self, model_name: str, route_name: str) -> str:
         """Map any local or legacy model name to Groq's active production flagship model."""
-        decommissioned = {"llama3-8b-8192", "llama3-70b-8192", "gemma2-9b-it", "gemma-7b-it", "llama2-70b-4096", "llama-3.1-70b-versatile"}
         m = model_name.strip() if model_name else ""
-        if not m or m in decommissioned:
+        if not m or m in DECOMMISSIONED_MODELS:
             return "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
         return m
 
@@ -170,18 +201,7 @@ class UpstreamClient:
         if "max_tokens" in payload and payload["max_tokens"] is not None:
             clean_payload["max_tokens"] = payload["max_tokens"]
 
-        decommissioned = {"llama3-8b-8192", "llama3-70b-8192", "gemma2-9b-it", "gemma-7b-it", "llama2-70b-4096", "llama-3.1-70b-versatile"}
-        req_model = clean_payload.get("model", "").strip()
-        if not req_model or req_model in decommissioned:
-            req_model = "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
-            clean_payload["model"] = req_model
-
-        candidate_models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
-        if req_model not in candidate_models and req_model not in decommissioned:
-            candidate_models.insert(0, req_model)
-        elif req_model in candidate_models:
-            candidate_models.remove(req_model)
-            candidate_models.insert(0, req_model)
+        candidate_models = build_groq_candidate_models(route_name, clean_payload.get("model", ""))
 
         last_err = ""
         for alt_model in candidate_models:
@@ -268,20 +288,9 @@ class UpstreamClient:
         if "max_tokens" in payload and payload["max_tokens"] is not None:
             clean_payload["max_tokens"] = payload["max_tokens"]
 
-        decommissioned = {"llama3-8b-8192", "llama3-70b-8192", "gemma2-9b-it", "gemma-7b-it", "llama2-70b-4096", "llama-3.1-70b-versatile"}
-        req_model = clean_payload.get("model", "").strip()
-        if not req_model or req_model in decommissioned:
-            req_model = "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
-            clean_payload["model"] = req_model
+        candidate_models = build_groq_candidate_models(route_name, clean_payload.get("model", ""))
 
         async def event_generator() -> AsyncGenerator[bytes, None]:
-            candidate_models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
-            if req_model not in candidate_models and req_model not in decommissioned:
-                candidate_models.insert(0, req_model)
-            elif req_model in candidate_models:
-                candidate_models.remove(req_model)
-                candidate_models.insert(0, req_model)
-
             last_err = ""
             for alt_model in candidate_models:
                 fb_payload = clean_payload.copy()
