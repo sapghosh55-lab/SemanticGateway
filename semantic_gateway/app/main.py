@@ -31,8 +31,12 @@ engine: Optional[SemanticEngine] = None
 upstream_client: Optional[UpstreamClient] = None
 telemetry_tracker: Optional[TelemetryTracker] = None
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_DIR = BASE_DIR / "static"
+# Robust STATIC_DIR resolution checking project root, package root, and CWD
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+if not (STATIC_DIR / "index.html").exists():
+    STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if not (STATIC_DIR / "index.html").exists():
+    STATIC_DIR = Path.cwd() / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 

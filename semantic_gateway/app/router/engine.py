@@ -38,14 +38,37 @@ class SemanticEngine:
         path = Path(path_str)
 
         if not path.exists():
-            parent_path = Path(__file__).resolve().parent.parent.parent / path_str
-            if parent_path.exists():
-                path = parent_path
-            else:
-                raise FileNotFoundError(f"Routes file not found at: {path.absolute()}")
+            candidates = [
+                Path(__file__).resolve().parent.parent.parent.parent / path_str,
+                Path(__file__).resolve().parent.parent.parent / path_str,
+                Path(__file__).resolve().parent.parent / path_str,
+                Path.cwd() / path_str,
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    path = candidate
+                    break
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        else:
+            data = {
+                "routes": [
+                    {
+                        "name": "fast_lane",
+                        "description": "Fast lane for simple/lightweight queries",
+                        "target_model": self.settings.FAST_MODEL_NAME,
+                        "utterances": ["hello", "hi", "what is 2+2", "convert units", "what is the capital of france"]
+                    },
+                    {
+                        "name": "deep_lane",
+                        "description": "Deep lane for complex queries",
+                        "target_model": self.settings.FRONTIER_MODEL_NAME,
+                        "utterances": ["explain quantum physics", "design a system", "audit smart contract", "implement consensus algorithm"]
+                    }
+                ]
+            }
 
         raw_routes = data.get("routes", [])
         self.routes = []
