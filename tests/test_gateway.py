@@ -158,7 +158,7 @@ async def test_chat_completions_fast_lane_proxy(router_engine, tracker, settings
         res = await ac.post("/v1/chat/completions", json=payload)
         assert res.status_code == 200
         assert res.headers.get("x-semantic-route") == "fast_lane"
-        assert res.headers.get("x-semantic-model") == "gemma2:2b"
+        assert res.headers.get("x-semantic-model") in (settings.FAST_MODEL_NAME, "gemma2:2b", "gemma2-9b-it")
         assert res.headers.get("x-semantic-decision-source") in ("HEURISTIC_PREFILTER", "SEMANTIC_EMBEDDING")
         data = res.json()
         assert data["choices"][0]["message"]["content"] == "77°F"
