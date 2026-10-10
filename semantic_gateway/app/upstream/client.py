@@ -37,26 +37,30 @@ DECOMMISSIONED_MODELS = {
     "mixtral-8x7b-32768",
     "mixtral-8x7b",
     "gemma2:2b",
+    "llama-3.2-1b-preview",
+    "llama-3.2-3b-preview",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview",
 }
 
 VALID_GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
-    "llama-3.2-3b-preview",
-    "llama-3.2-1b-preview",
 ]
 
 
 def build_groq_candidate_models(route_name: str, requested_model: str) -> list[str]:
     req = requested_model.strip() if requested_model else ""
-    if not req or req in DECOMMISSIONED_MODELS:
-        req = "llama-3.1-8b-instant" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
+    if req and req not in DECOMMISSIONED_MODELS and req not in VALID_GROQ_MODELS:
+        if route_name == "fast_lane":
+            return [req, "llama-3.1-8b-instant", "llama-3.3-70b-versatile"]
+        else:
+            return [req, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
-    candidates = [req]
-    for m in VALID_GROQ_MODELS:
-        if m not in candidates and m not in DECOMMISSIONED_MODELS:
-            candidates.append(m)
-    return candidates
+    if route_name == "fast_lane":
+        return ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]
+    else:
+        return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
 
 class UpstreamClient:
