@@ -22,7 +22,7 @@ except ImportError:
 def settings():
     return Settings(
         SIMILARITY_THRESHOLD=0.45,
-        FAST_MODEL_NAME="gemma2:2b",
+        FAST_MODEL_NAME="llama-3.1-8b-instant",
         FRONTIER_MODEL_NAME="llama-3.3-70b-versatile",
         ROUTES_FILE="routes.yaml"
     )
@@ -48,7 +48,7 @@ def test_temperature_conversion_routes_to_fast_lane(router_engine):
     decision = router_engine.classify(prompt)
 
     assert decision.target_route == "fast_lane"
-    assert decision.selected_model == "gemma2:2b"
+    assert decision.selected_model == "llama-3.1-8b-instant"
     assert decision.classification_time_ms < 35.0
 
 
