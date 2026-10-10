@@ -1,8 +1,10 @@
+import os
 import json
 from typing import AsyncGenerator, Dict, Any, Tuple, Optional
 import httpx
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi import HTTPException
+
 try:
     from app.router.models import ChatCompletionRequest, RouteDecision
     from app.telemetry.tracker import TelemetryTracker
@@ -13,7 +15,7 @@ except (ImportError, ModuleNotFoundError):
     from semantic_gateway.app.config import Settings, get_settings
 
 
-def is_valid_api_key(key: str) -> bool:
+def is_valid_api_key(key: Optional[str]) -> bool:
     """Check if an API key is present and not a dummy placeholder string."""
     if not key:
         return False
@@ -36,31 +38,68 @@ class UpstreamClient:
     async def close(self) -> None:
         await self.client.aclose()
 
+    def resolve_api_key(self, preferred_key: str) -> str:
+        """Dynamically find a valid API key from preferred key, GROQ_API_KEY, or environment variables."""
+        if is_valid_api_key(preferred_key):
+            return preferred_key.strip()
+
+        candidates = [
+            getattr(self.settings, "GROQ_API_KEY", ""),
+            os.getenv("GROQ_API_KEY", ""),
+            getattr(self.settings, "FRONTIER_MODEL_API_KEY", ""),
+            os.getenv("FRONTIER_MODEL_API_KEY", ""),
+            getattr(self.settings, "DEEP_MODEL_API_KEY", ""),
+            os.getenv("DEEP_MODEL_API_KEY", ""),
+            getattr(self.settings, "FAST_MODEL_API_KEY", ""),
+            os.getenv("FAST_MODEL_API_KEY", ""),
+            getattr(self.settings, "GEMINI_API_KEY", ""),
+            os.getenv("GEMINI_API_KEY", ""),
+        ]
+        for key in candidates:
+            if is_valid_api_key(key):
+                return key.strip()
+        return ""
+
+    def map_groq_model_name(self, model_name: str, route_name: str) -> str:
+        """Map local or legacy model names to valid Groq API model identifiers."""
+        m = (model_name or "").strip().lower()
+        if m in ("gemma2:2b", "gemma2", "gemma", "gemma-2b"):
+            return "gemma2-9b-it"
+        if m in ("llama3:70b", "llama3.3", "llama-3.3-70b"):
+            return "llama-3.3-70b-versatile"
+        if ":" in m:
+            return "gemma2-9b-it" if route_name == "fast_lane" else "llama-3.3-70b-versatile"
+        return model_name.strip()
+
     def resolve_target(self, decision: RouteDecision) -> Tuple[str, str, str, str, str]:
         """
         Resolves (base_url, selected_model, api_key, target_route, fallback_reason).
         """
         if decision.target_route == "fast_lane":
-            return (
-                self.settings.FAST_MODEL_BASE_URL.strip(),
-                decision.selected_model.strip() if decision.selected_model else self.settings.FAST_MODEL_NAME.strip(),
-                self.settings.FAST_MODEL_API_KEY.strip(),
-                "fast_lane",
-                ""
-            )
+            base_url = self.settings.FAST_MODEL_BASE_URL.strip()
+            raw_model = decision.selected_model.strip() if decision.selected_model else self.settings.FAST_MODEL_NAME.strip()
+            pref_key = self.settings.FAST_MODEL_API_KEY.strip()
+            api_key = self.resolve_api_key(pref_key)
+
+            if "groq.com" in base_url:
+                model_name = self.map_groq_model_name(raw_model, "fast_lane")
+            else:
+                model_name = raw_model
+
+            return (base_url, model_name, api_key, "fast_lane", "")
 
         # DEEP_LANE configuration
         deep_base_url = getattr(self.settings, "DEEP_MODEL_BASE_URL", "https://api.groq.com/openai/v1").strip()
-        deep_model_name = decision.selected_model.strip() if decision.selected_model else getattr(self.settings, "DEEP_MODEL_NAME", "llama-3.3-70b-versatile").strip()
-        deep_api_key = getattr(self.settings, "DEEP_MODEL_API_KEY", "").strip()
+        raw_deep_model = decision.selected_model.strip() if decision.selected_model else getattr(self.settings, "DEEP_MODEL_NAME", "llama-3.3-70b-versatile").strip()
+        pref_deep_key = getattr(self.settings, "DEEP_MODEL_API_KEY", "").strip()
+        deep_api_key = self.resolve_api_key(pref_deep_key)
 
-        return (
-            deep_base_url,
-            deep_model_name,
-            deep_api_key,
-            "deep_lane",
-            ""
-        )
+        if "groq.com" in deep_base_url:
+            deep_model_name = self.map_groq_model_name(raw_deep_model, "deep_lane")
+        else:
+            deep_model_name = raw_deep_model
+
+        return (deep_base_url, deep_model_name, deep_api_key, "deep_lane", "")
 
     async def forward(
         self,
@@ -71,18 +110,15 @@ class UpstreamClient:
 
         if decision.target_route == "deep_lane":
             target_url = "https://api.groq.com/openai/v1/chat/completions"
-            target_model = self.settings.DEEP_MODEL_NAME.strip()
-            api_key = self.settings.DEEP_MODEL_API_KEY.strip()
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
+            target_model = self.map_groq_model_name(self.settings.DEEP_MODEL_NAME.strip(), "deep_lane")
+            api_key = self.resolve_api_key(self.settings.DEEP_MODEL_API_KEY.strip())
         else:
             target_url = f"{base_url.rstrip('/')}/chat/completions"
             target_model = model_name
-            headers = {"Content-Type": "application/json"}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         print(f"[SemanticRouter] Routing upstream to {route_name.upper()} ({target_model}) at {target_url}")
 
@@ -90,11 +126,11 @@ class UpstreamClient:
 
         if not request.stream:
             return await self._forward_sync(
-                target_url, headers, payload, decision, target_model, route_name
+                target_url, headers, payload, decision, target_model, route_name, api_key
             )
         else:
             return await self._forward_stream(
-                target_url, headers, payload, decision, target_model, route_name
+                target_url, headers, payload, decision, target_model, route_name, api_key
             )
 
     async def _forward_sync(
@@ -104,7 +140,8 @@ class UpstreamClient:
         payload: Dict[str, Any],
         decision: RouteDecision,
         model_name: str,
-        route_name: str
+        route_name: str,
+        api_key: str
     ) -> JSONResponse:
         resp_headers = {
             "x-semantic-route": route_name,
@@ -119,7 +156,29 @@ class UpstreamClient:
             "X-Semantic-Router-Decision-Source": decision.decision_source
         }
 
-        # Filter payload: Groq requires strict OpenAI payload formatting
+        # Check if API key is present before attempting cloud API call
+        if "api.groq.com" in url and not is_valid_api_key(api_key):
+            notice_msg = (
+                "[Configuration Notice]: GROQ_API_KEY is not set in Render environment variables. "
+                "Please add GROQ_API_KEY to your Render Dashboard -> Environment Settings to enable live LLM responses."
+            )
+            return JSONResponse(
+                status_code=200,
+                headers=resp_headers,
+                content={
+                    "id": "chatcmpl-config-notice",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": notice_msg},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
+            )
+
         clean_payload = {
             "model": model_name.strip(),
             "messages": payload.get("messages", []),
@@ -143,51 +202,31 @@ class UpstreamClient:
 
             print(f"[DEBUG GROQ ERROR]: {response.status_code} - {response.text}")
 
-            # If 404 model_not_found or non-200 error, fallback to candidate Groq models
+            # If 404 model_not_found or non-200 error, fallback to candidate models
             if route_name == "deep_lane":
-                fallback_models = ["llama-3.1-8b-instant", "llama3-70b-8192", "openai/gpt-oss-120b"]
-                for alt_model in fallback_models:
-                    if alt_model == clean_payload['model']:
-                        continue
-                    fb_payload = clean_payload.copy()
-                    fb_payload["model"] = alt_model
-                    print(f"[DEBUG GROQ] URL: {url} | Model: {alt_model}")
-                    fb_res = await self.client.post(url, json=fb_payload, headers=headers)
-                    if fb_res.status_code == 200:
-                        data = fb_res.json()
-                        data["model"] = model_name
-                        usage = data.get("usage", {})
-                        prompt_tokens = usage.get("prompt_tokens", 100)
-                        completion_tokens = usage.get("completion_tokens", 50)
-                        cost_saved = self.tracker.record_usage(route_name, prompt_tokens, completion_tokens)
-                        resp_headers["x-estimated-cost-saved"] = f"{cost_saved:.6f}"
-                        resp_headers["x-semantic-model"] = model_name
-                        resp_headers["X-Semantic-Router-Model"] = model_name
-                        return JSONResponse(content=data, status_code=200, headers=resp_headers)
-                    else:
-                        print(f"[DEBUG GROQ ERROR]: {fb_res.status_code} - {fb_res.text}")
-            elif route_name == "fast_lane":
-                fallback_models = ["openai/gpt-oss-20b", "llama-3.1-8b-instant", "qwen/qwen3.8-27b"]
-                for alt_model in fallback_models:
-                    if alt_model == clean_payload['model']:
-                        continue
-                    fb_payload = clean_payload.copy()
-                    fb_payload["model"] = alt_model
-                    print(f"[DEBUG GROQ FAST] URL: {url} | Model: {alt_model}")
-                    fb_res = await self.client.post(url, json=fb_payload, headers=headers)
-                    if fb_res.status_code == 200:
-                        data = fb_res.json()
-                        data["model"] = model_name
-                        usage = data.get("usage", {})
-                        prompt_tokens = usage.get("prompt_tokens", 100)
-                        completion_tokens = usage.get("completion_tokens", 50)
-                        cost_saved = self.tracker.record_usage(route_name, prompt_tokens, completion_tokens)
-                        resp_headers["x-estimated-cost-saved"] = f"{cost_saved:.6f}"
-                        resp_headers["x-semantic-model"] = model_name
-                        resp_headers["X-Semantic-Router-Model"] = model_name
-                        return JSONResponse(content=data, status_code=200, headers=resp_headers)
-                    else:
-                        print(f"[DEBUG GROQ FAST ERROR]: {fb_res.status_code} - {fb_res.text}")
+                fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
+            else:
+                fallback_models = ["gemma2-9b-it", "llama-3.1-8b-instant", "llama3-8b-8192"]
+
+            for alt_model in fallback_models:
+                if alt_model == clean_payload['model']:
+                    continue
+                fb_payload = clean_payload.copy()
+                fb_payload["model"] = alt_model
+                print(f"[DEBUG GROQ FALLBACK] URL: {url} | Model: {alt_model}")
+                fb_res = await self.client.post(url, json=fb_payload, headers=headers)
+                if fb_res.status_code == 200:
+                    data = fb_res.json()
+                    usage = data.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 100)
+                    completion_tokens = usage.get("completion_tokens", 50)
+                    cost_saved = self.tracker.record_usage(route_name, prompt_tokens, completion_tokens)
+                    resp_headers["x-estimated-cost-saved"] = f"{cost_saved:.6f}"
+                    resp_headers["x-semantic-model"] = alt_model
+                    resp_headers["X-Semantic-Router-Model"] = alt_model
+                    return JSONResponse(content=data, status_code=200, headers=resp_headers)
+                else:
+                    print(f"[DEBUG GROQ FALLBACK ERROR]: {fb_res.status_code} - {fb_res.text}")
 
             err_msg = f"[Upstream Error (HTTP {response.status_code})]: {response.text}"
 
@@ -209,16 +248,11 @@ class UpstreamClient:
                 "object": "chat.completion",
                 "created": 1700000000,
                 "model": model_name,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": err_msg
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": err_msg},
+                    "finish_reason": "stop"
+                }],
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
         )
@@ -230,9 +264,33 @@ class UpstreamClient:
         payload: Dict[str, Any],
         decision: RouteDecision,
         model_name: str,
-        route_name: str
+        route_name: str,
+        api_key: str
     ) -> StreamingResponse:
         estimated_saved = self.tracker.calculate_cost_saved(route_name, prompt_tokens=100, completion_tokens=50)
+
+        response_headers = {
+            "x-semantic-route": route_name,
+            "x-semantic-model": model_name,
+            "x-semantic-classification-ms": str(decision.classification_time_ms),
+            "x-semantic-decision-source": decision.decision_source,
+            "x-estimated-cost-saved": f"{estimated_saved:.6f}",
+            "X-Semantic-Router-Tier": "fast" if route_name == "fast_lane" else "deep",
+            "X-Semantic-Router-Model": model_name,
+            "X-Semantic-Router-Score": str(decision.similarity_score),
+            "X-Semantic-Router-Latency-MS": str(decision.classification_time_ms),
+            "X-Semantic-Router-Decision-Source": decision.decision_source
+        }
+
+        if "api.groq.com" in url and not is_valid_api_key(api_key):
+            notice_msg = (
+                "[Configuration Notice]: GROQ_API_KEY is not set in Render environment variables. "
+                "Please add GROQ_API_KEY to your Render Dashboard -> Environment Settings to enable live LLM responses."
+            )
+            async def notice_generator() -> AsyncGenerator[bytes, None]:
+                err_json = {"choices": [{"message": {"role": "assistant", "content": notice_msg}}]}
+                yield f"data: {json.dumps(err_json)}\n\n".encode("utf-8")
+            return StreamingResponse(notice_generator(), media_type="text/event-stream", headers=response_headers)
 
         clean_payload = {
             "model": model_name.strip(),
@@ -253,35 +311,24 @@ class UpstreamClient:
                         print(f"[DEBUG GROQ ERROR]: {response.status_code} - {err_text}")
 
                         if route_name == "deep_lane":
-                            for alt_model in ["llama-3.1-8b-instant", "llama3-70b-8192", "openai/gpt-oss-120b"]:
-                                if alt_model == clean_payload['model']:
-                                    continue
-                                fb_payload = clean_payload.copy()
-                                fb_payload["model"] = alt_model
-                                print(f"[DEBUG GROQ] URL: {url} | Model: {alt_model}")
-                                async with self.client.stream("POST", url, json=fb_payload, headers=headers) as fb_res:
-                                    if fb_res.status_code == 200:
-                                        async for chunk in fb_res.aiter_bytes():
-                                            yield chunk
-                                        return
-                                    else:
-                                        fb_err = await fb_res.aread()
-                                        print(f"[DEBUG GROQ ERROR]: {fb_res.status_code} - {fb_err.decode('utf-8', errors='replace')}")
-                        elif route_name == "fast_lane":
-                            for alt_model in ["openai/gpt-oss-20b", "llama-3.1-8b-instant", "qwen/qwen3.8-27b"]:
-                                if alt_model == clean_payload['model']:
-                                    continue
-                                fb_payload = clean_payload.copy()
-                                fb_payload["model"] = alt_model
-                                print(f"[DEBUG GROQ FAST] URL: {url} | Model: {alt_model}")
-                                async with self.client.stream("POST", url, json=fb_payload, headers=headers) as fb_res:
-                                    if fb_res.status_code == 200:
-                                        async for chunk in fb_res.aiter_bytes():
-                                            yield chunk
-                                        return
-                                    else:
-                                        fb_err = await fb_res.aread()
-                                        print(f"[DEBUG GROQ FAST ERROR]: {fb_res.status_code} - {fb_err.decode('utf-8', errors='replace')}")
+                            fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
+                        else:
+                            fallback_models = ["gemma2-9b-it", "llama-3.1-8b-instant", "llama3-8b-8192"]
+
+                        for alt_model in fallback_models:
+                            if alt_model == clean_payload['model']:
+                                continue
+                            fb_payload = clean_payload.copy()
+                            fb_payload["model"] = alt_model
+                            print(f"[DEBUG GROQ FALLBACK] URL: {url} | Model: {alt_model}")
+                            async with self.client.stream("POST", url, json=fb_payload, headers=headers) as fb_res:
+                                if fb_res.status_code == 200:
+                                    async for chunk in fb_res.aiter_bytes():
+                                        yield chunk
+                                    return
+                                else:
+                                    fb_err = await fb_res.aread()
+                                    print(f"[DEBUG GROQ FALLBACK ERROR]: {fb_res.status_code} - {fb_err.decode('utf-8', errors='replace')}")
 
                         err_json = {
                             "choices": [{
@@ -300,18 +347,5 @@ class UpstreamClient:
                 print(f"[Upstream General Error]: {repr(e)}")
                 err_json = {"choices": [{"message": {"role": "assistant", "content": f"[Upstream Error ({type(e).__name__})]: {str(e)}"}}]}
                 yield f"data: {json.dumps(err_json)}\n\n".encode("utf-8")
-
-        response_headers = {
-            "x-semantic-route": route_name,
-            "x-semantic-model": model_name,
-            "x-semantic-classification-ms": str(decision.classification_time_ms),
-            "x-semantic-decision-source": decision.decision_source,
-            "x-estimated-cost-saved": f"{estimated_saved:.6f}",
-            "X-Semantic-Router-Tier": "fast" if route_name == "fast_lane" else "deep",
-            "X-Semantic-Router-Model": model_name,
-            "X-Semantic-Router-Score": str(decision.similarity_score),
-            "X-Semantic-Router-Latency-MS": str(decision.classification_time_ms),
-            "X-Semantic-Router-Decision-Source": decision.decision_source
-        }
 
         return StreamingResponse(event_generator(), media_type="text/event-stream", headers=response_headers)
